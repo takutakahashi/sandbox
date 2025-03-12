@@ -1,0 +1,66 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-primary
+  labels:
+    app: postgres-primary
+spec:
+  ports:
+  - port: 5432
+    targetPort: 5432
+    name: postgres
+  selector:
+    app: postgres-primary
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-primary-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres-primary
+  labels:
+    app: postgres-primary
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres-primary
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: postgres-primary
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:15
+        ports:
+        - containerPort: 5432
+        env:
+        - name: POSTGRES_PASSWORD
+          value: postgres
+        - name: POSTGRES_USER
+          value: postgres
+        - name: POSTGRES_DB
+          value: postgres
+        volumeMounts:
+        - name: postgres-primary-storage
+          mountPath: /var/lib/postgresql/data
+        resources:
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+      volumes:
+      - name: postgres-primary-storage
+        persistentVolumeClaim:
+          claimName: postgres-primary-pvc

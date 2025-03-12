@@ -1,0 +1,87 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-async-replica
+  labels:
+    app: postgres-async-replica
+spec:
+  ports:
+  - port: 5432
+    targetPort: 5432
+    name: postgres
+  selector:
+    app: postgres-async-replica
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-async-replica-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres-async-replica
+  labels:
+    app: postgres-async-replica
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres-async-replica
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: postgres-async-replica
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:15
+        ports:
+        - containerPort: 5432
+        env:
+        - name: POSTGRES_PASSWORD
+          value: postgres
+        - name: POSTGRES_USER
+          value: postgres
+        - name: POSTGRES_DB
+          value: postgres
+        volumeMounts:
+        - name: postgres-async-replica-storage
+          mountPath: /var/lib/postgresql/data
+        - name: postgres-config
+          mountPath: /etc/postgresql/custom-config
+        resources:
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+      volumes:
+      - name: postgres-async-replica-storage
+        persistentVolumeClaim:
+          claimName: postgres-async-replica-pvc
+      - name: postgres-config
+        configMap:
+          name: postgres-async-replica-config
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-async-replica-config
+data:
+  postgresql.conf: |
+    listen_addresses = '*'
+    hot_standby = on
+    wal_level = logical
+    max_wal_senders = 10
+    synchronous_commit = off   # 非同期レプリケーション設定
+  pg_hba.conf: |
+    # TYPE  DATABASE        USER            ADDRESS                 METHOD
+    local   all             all                                     trust
+    host    all             all             0.0.0.0/0               md5

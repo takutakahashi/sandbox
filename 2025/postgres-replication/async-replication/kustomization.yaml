@@ -1,0 +1,4 @@
+namespace: postgres-async-replication
+resources:
+- ./postgres-primary.yaml
+- ./postgres-async-replica.yaml

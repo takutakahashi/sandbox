@@ -1,0 +1,4 @@
+namespace: postgres-suburi
+resources:
+- ./postgres-primary.yaml
+- ./postgres-replica.yaml

@@ -1,0 +1,52 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: aws-rds-secret
+type: Opaque
+data:
+  # 実際の値に置き換えてください（base64エンコード）
+  endpoint: ZXhhbXBsZS54eHh4eHgudXMtZWFzdC0xLnJkcy5hbWF6b25hd3MuY29t  # RDSエンドポイント
+  port: NTQzMg==                                                   # デフォルトは5432
+  database: cG9zdGdyZXM=                                          # データベース名
+  username: cG9zdGdyZXM=                                          # ユーザー名
+  password: WW91clJEU1Bhc3N3b3JkMTIzIQ==                          # パスワード
+---
+# レプリケーションテスト用の一時的なPodを作成するためのマニフェスト
+apiVersion: v1
+kind: Pod
+metadata:
+  name: rds-connection-test
+  labels:
+    app: rds-connection-test
+spec:
+  containers:
+  - name: postgres-client
+    image: postgres:15
+    command: ["sleep", "infinity"]
+    env:
+    - name: PGPASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: aws-rds-secret
+          key: password
+    - name: PGENDPOINT
+      valueFrom:
+        secretKeyRef:
+          name: aws-rds-secret
+          key: endpoint
+    - name: PGPORT
+      valueFrom:
+        secretKeyRef:
+          name: aws-rds-secret
+          key: port
+    - name: PGDATABASE
+      valueFrom:
+        secretKeyRef:
+          name: aws-rds-secret
+          key: database
+    - name: PGUSER
+      valueFrom:
+        secretKeyRef:
+          name: aws-rds-secret
+          key: username
+  restartPolicy: Never

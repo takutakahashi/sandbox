@@ -1,0 +1,4 @@
+namespace: postgres-rds-replication
+resources:
+- ./postgres-primary.yaml
+- ./rds-connection.yaml
