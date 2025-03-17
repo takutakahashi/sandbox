@@ -402,6 +402,8 @@ kubectl exec $REPLICA_POD -n postgres-async-replication -- psql -U postgres -c "
 2. プライマリとレプリカの両方で`wal_level = logical`の設定が必要
 3. 各データベースごとに個別に発行（publication）と購読（subscription）の設定が必要
 
+> **重要**: PostgreSQLの`wal_level`が`replica`に設定されている場合、論理レプリケーションのためには`logical`に変更する必要があります。この変更には PostgreSQL の再起動が必要であり、単なる設定のリロードでは適用されません。再起動に伴うダウンタイムを計画してください。
+
 ### 12.2. プライマリサーバーの論理レプリケーション設定
 
 まず、プライマリサーバーの設定を変更します：
@@ -413,19 +415,44 @@ PRIMARY_POD=$(kubectl get pod -l app=postgres-primary -n postgres-async-replicat
 # データベース一覧を確認
 kubectl exec $PRIMARY_POD -n postgres-async-replication -- psql -U postgres -c "\l"
 
-# 設定ファイルにwal_level = logicalが含まれていることを確認
-kubectl exec $PRIMARY_POD -n postgres-async-replication -- grep "wal_level" /var/lib/postgresql/data/postgresql.conf
-
-# wal_level = logicalに設定されていない場合は設定を追加
-kubectl exec -it $PRIMARY_POD -n postgres-async-replication -- bash -c "echo 'wal_level = logical' >> /var/lib/postgresql/data/postgresql.conf"
-
-# 設定をリロードまたはサーバーを再起動
-kubectl exec $PRIMARY_POD -n postgres-async-replication -- su - postgres -c "pg_ctl reload -D /var/lib/postgresql/data"
-# または、必要に応じて再起動（wal_levelの変更は再起動が必要）
-# kubectl exec $PRIMARY_POD -n postgres-async-replication -- su - postgres -c "pg_ctl restart -D /var/lib/postgresql/data"
-
-# wal_levelの設定を確認
+# 現在のwal_levelを確認
 kubectl exec $PRIMARY_POD -n postgres-async-replication -- psql -U postgres -c "SHOW wal_level;"
+
+# wal_levelがlogicalでない場合は設定を変更
+if [ "$(kubectl exec $PRIMARY_POD -n postgres-async-replication -- psql -U postgres -t -c "SHOW wal_level;" | tr -d '[:space:]')" != "logical" ]; then
+  echo "wal_levelをlogicalに変更します。PostgreSQLの再起動が必要です。"
+  
+  # postgresql.confを編集
+  kubectl exec -it $PRIMARY_POD -n postgres-async-replication -- bash -c "cat > /tmp/update_wal.sh << 'EOF'
+#!/bin/bash
+# wal_levelの設定行を探す
+if grep -q 'wal_level' /var/lib/postgresql/data/postgresql.conf; then
+  # 既存の設定を置換
+  sed -i 's/^[#]*wal_level.*$/wal_level = logical/' /var/lib/postgresql/data/postgresql.conf
+else
+  # 設定が存在しない場合は追加
+  echo 'wal_level = logical' >> /var/lib/postgresql/data/postgresql.conf
+fi
+EOF"
+
+  # スクリプトを実行してwal_levelを更新
+  kubectl exec -it $PRIMARY_POD -n postgres-async-replication -- bash -c "chmod +x /tmp/update_wal.sh && /tmp/update_wal.sh"
+  
+  # PostgreSQLを再起動（ダウンタイムが発生）
+  echo "PostgreSQLを再起動しています..."
+  kubectl exec $PRIMARY_POD -n postgres-async-replication -- su - postgres -c "pg_ctl restart -D /var/lib/postgresql/data -m fast"
+  echo "wal_levelの変更を適用するためにPostgreSQLを再起動しました。"
+  
+  # 再起動後の設定を確認
+  sleep 10  # 再起動完了を待つ
+  kubectl exec $PRIMARY_POD -n postgres-async-replication -- psql -U postgres -c "SHOW wal_level;"
+else
+  echo "wal_levelはすでにlogicalに設定されています。設定変更は不要です。"
+fi
+
+# その他のレプリケーション関連設定を確認
+kubectl exec $PRIMARY_POD -n postgres-async-replication -- psql -U postgres -c "SHOW max_wal_senders;"
+kubectl exec $PRIMARY_POD -n postgres-async-replication -- psql -U postgres -c "SHOW max_replication_slots;"
 ```
 
 ### 12.3. レプリカサーバーの論理レプリケーション設定
@@ -436,16 +463,40 @@ kubectl exec $PRIMARY_POD -n postgres-async-replication -- psql -U postgres -c "
 # レプリカPodの名前を取得
 REPLICA_POD=$(kubectl get pod -l app=postgres-async-replica -n postgres-async-replication -o jsonpath="{.items[0].metadata.name}")
 
-# レプリカでも同様にwal_level = logicalを設定
-kubectl exec -it $REPLICA_POD -n postgres-async-replication -- bash -c "echo 'wal_level = logical' >> /var/lib/postgresql/data/postgresql.conf"
-
-# 設定をリロードまたはサーバーを再起動
-kubectl exec $REPLICA_POD -n postgres-async-replication -- su - postgres -c "pg_ctl reload -D /var/lib/postgresql/data"
-# または、必要に応じて再起動
-# kubectl exec $REPLICA_POD -n postgres-async-replication -- su - postgres -c "pg_ctl restart -D /var/lib/postgresql/data"
-
-# wal_levelの設定を確認
+# 現在のwal_levelを確認
 kubectl exec $REPLICA_POD -n postgres-async-replication -- psql -U postgres -c "SHOW wal_level;"
+
+# wal_levelがlogicalでない場合は設定を変更
+if [ "$(kubectl exec $REPLICA_POD -n postgres-async-replication -- psql -U postgres -t -c "SHOW wal_level;" | tr -d '[:space:]')" != "logical" ]; then
+  echo "レプリカのwal_levelをlogicalに変更します。PostgreSQLの再起動が必要です。"
+  
+  # postgresql.confを編集
+  kubectl exec -it $REPLICA_POD -n postgres-async-replication -- bash -c "cat > /tmp/update_wal.sh << 'EOF'
+#!/bin/bash
+# wal_levelの設定行を探す
+if grep -q 'wal_level' /var/lib/postgresql/data/postgresql.conf; then
+  # 既存の設定を置換
+  sed -i 's/^[#]*wal_level.*$/wal_level = logical/' /var/lib/postgresql/data/postgresql.conf
+else
+  # 設定が存在しない場合は追加
+  echo 'wal_level = logical' >> /var/lib/postgresql/data/postgresql.conf
+fi
+EOF"
+
+  # スクリプトを実行してwal_levelを更新
+  kubectl exec -it $REPLICA_POD -n postgres-async-replication -- bash -c "chmod +x /tmp/update_wal.sh && /tmp/update_wal.sh"
+  
+  # PostgreSQLを再起動（ダウンタイムが発生）
+  echo "レプリカのPostgreSQLを再起動しています..."
+  kubectl exec $REPLICA_POD -n postgres-async-replication -- su - postgres -c "pg_ctl restart -D /var/lib/postgresql/data -m fast"
+  echo "wal_levelの変更を適用するためにレプリカのPostgreSQLを再起動しました。"
+  
+  # 再起動後の設定を確認
+  sleep 10  # 再起動完了を待つ
+  kubectl exec $REPLICA_POD -n postgres-async-replication -- psql -U postgres -c "SHOW wal_level;"
+else
+  echo "レプリカのwal_levelはすでにlogicalに設定されています。設定変更は不要です。"
+fi
 ```
 
 ### 12.4. 複数データベースの論理レプリケーション設定
